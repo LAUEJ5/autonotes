@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Search</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <button class="notesToggle" id="notesToggleBtn" type="button" aria-expanded="false">
+        Evidence
+      </button>
+
+      <section class="hero" id="hero">
+        <div class="logo" aria-label="Search">
+          <span class="b">S</span><span class="r">e</span><span class="y">a</span><span class="b">r</span><span class="g">c</span
+          ><span class="r">h</span>
+        </div>
+
+        <form id="searchForm" class="search" autocomplete="off">
+          <div class="searchBox">
+            <span class="icon" aria-hidden="true">⌕</span>
+            <input
+              id="q"
+              name="q"
+              type="search"
+              placeholder="Search the web"
+              autofocus
+              aria-label="Search"
+            />
+          </div>
+        </form>
+      </section>
+
+      <section class="resultsWrap" id="resultsWrap" hidden>
+        <header class="resultsHeader">
+          <a class="miniLogo" href="/" aria-label="Home">
+            <span class="b">S</span><span class="r">e</span><span class="y">a</span><span class="b">r</span><span class="g">c</span
+            ><span class="r">h</span>
+          </a>
+          <form id="searchFormTop" class="searchTop" autocomplete="off">
+            <input id="qTop" name="q" type="search" aria-label="Search" />
+          </form>
+        </header>
+
+        <div class="meta" id="meta"></div>
+        <div class="results" id="results"></div>
+        <div class="article" id="article" hidden>
+          <div class="articleBar">
+            <div class="articleTitle" id="articleTitle"></div>
+            <a
+              class="articleExternal"
+              id="articleExternal"
+              href="#"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open on Wikipedia
+            </a>
+          </div>
+          <iframe
+            class="articleFrame"
+            id="articleFrame"
+            title="Wikipedia article"
+            loading="eager"
+            referrerpolicy="no-referrer"
+          ></iframe>
+        </div>
+        <div class="error" id="error" hidden></div>
+      </section>
+
+      <aside class="notesPanel" id="notesPanel" aria-label="Evidence board" aria-hidden="true">
+        <header class="notesHeader">
+          <div class="notesTitle">Evidence board</div>
+          <div class="boardHeaderActions">
+            <button class="btn boardBtn" id="clearBoardBtn" type="button">Clear</button>
+            <button class="notesClose" id="notesCloseBtn" type="button" aria-label="Close evidence board">✕</button>
+          </div>
+        </header>
+        <div class="notesEditor evidenceList" id="evidenceList" aria-label="Evidence cards"></div>
+      </aside>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
+
