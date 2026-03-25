@@ -15,18 +15,108 @@ const articleExternalEl = document.getElementById("articleExternal");
 const articleFrameEl = document.getElementById("articleFrame");
 const errorEl = document.getElementById("error");
 
-// Variant B: Evidence board (toggleable, like Notes in upstream)
+// Notes panel (upstream behavior)
 const notesToggleBtn = document.getElementById("notesToggleBtn");
 const notesCloseBtn = document.getElementById("notesCloseBtn");
 const notesPanel = document.getElementById("notesPanel");
-const evidenceListEl = document.getElementById("evidenceList");
-const clearBoardBtn = document.getElementById("clearBoardBtn");
+const notesEditor = document.getElementById("notesEditor");
+const NOTES_STORAGE_KEY = "investigationNotes.v2";
+const selectionSearchBtn = document.getElementById("selectionSearchBtn");
+const autoNotesBtn = document.getElementById("autoNotesBtn");
+const autoNotesStatus = document.getElementById("autoNotesStatus");
+let lastSelectionText = "";
 
-const EVIDENCE_STORAGE_KEY = "evidenceBoard.v2";
+let autoNotes = {
+  running: false,
+  abortController: null,
+  timeoutId: null
+};
 
-let lastResults = [];
-let evidence = loadEvidence();
-let dragCardId = null;
+function setAutoNotesUi({ running, statusText }) {
+  if (autoNotesBtn) autoNotesBtn.setAttribute("aria-pressed", String(Boolean(running)));
+  if (autoNotesBtn) autoNotesBtn.textContent = running ? "Stop auto notes" : "Auto notes (30s)";
+  if (autoNotesStatus) autoNotesStatus.textContent = statusText || "";
+}
+
+function stopAutoNotes(reasonText) {
+  if (autoNotes.timeoutId) clearTimeout(autoNotes.timeoutId);
+  autoNotes.timeoutId = null;
+
+  if (autoNotes.abortController) {
+    try {
+      autoNotes.abortController.abort();
+    } catch {
+      // ignore
+    }
+  }
+  autoNotes.abortController = null;
+  autoNotes.running = false;
+  setAutoNotesUi({ running: false, statusText: reasonText || "" });
+}
+
+function appendToNotes(block) {
+  if (!notesEditor) return;
+  const existing = notesEditor.textContent || "";
+  const next = existing ? `${existing}\n\n${block}` : block;
+  notesEditor.textContent = next;
+  try {
+    localStorage.setItem(NOTES_STORAGE_KEY, notesEditor.textContent || "");
+  } catch {
+    // ignore
+  }
+}
+
+async function runAutoNotes() {
+  const wikiTitle = getWikiTitleFromPath();
+  if (!wikiTitle) {
+    setAutoNotesUi({ running: false, statusText: "Open a Wikipedia article first." });
+    return;
+  }
+
+  // Start a 30s run
+  stopAutoNotes("");
+  autoNotes.running = true;
+  autoNotes.abortController = new AbortController();
+  setAutoNotesUi({ running: true, statusText: "Summarizing…" });
+
+  autoNotes.timeoutId = setTimeout(() => {
+    stopAutoNotes("Timed out.");
+  }, 30_000);
+
+  const r = await fetch("/api/auto-notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: wikiTitle }),
+    signal: autoNotes.abortController.signal
+  }).catch((e) => {
+    if (e?.name === "AbortError") return null;
+    throw e;
+  });
+
+  if (!r) return; // aborted
+
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok || !json?.ok) {
+    stopAutoNotes("");
+    setAutoNotesUi({ running: false, statusText: json?.error || "Summarize failed." });
+    return;
+  }
+
+  const when = new Date().toLocaleString();
+  const prettyTitle = String(json.title || wikiTitle).replaceAll("_", " ");
+  const articleUrl = `https://en.wikipedia.org/wiki/${encodeURIComponent(String(json.title || wikiTitle))}`;
+  const summary = String(json.summary || "").trim();
+
+  if (summary) {
+    appendToNotes(`[${when}] ${prettyTitle}\n${articleUrl}\n\n${summary}`);
+  }
+
+  stopAutoNotes("Done.");
+  // Auto-clear status after a moment
+  setTimeout(() => {
+    if (!autoNotes.running) setAutoNotesUi({ running: false, statusText: "" });
+  }, 2000);
+}
 
 function setNotesOpen(open) {
   const isOpen = Boolean(open);
@@ -34,10 +124,61 @@ function setNotesOpen(open) {
   notesToggleBtn?.setAttribute("aria-expanded", String(isOpen));
   notesPanel?.setAttribute("aria-hidden", String(!isOpen));
   if (notesToggleBtn) notesToggleBtn.hidden = isOpen;
+  if (isOpen) {
+    setTimeout(() => notesEditor?.focus(), 0);
+  }
 }
 
 function toggleNotes() {
   setNotesOpen(!document.body.classList.contains("notesOpen"));
+}
+
+function hideSelectionSearch() {
+  if (!selectionSearchBtn) return;
+  selectionSearchBtn.hidden = true;
+  lastSelectionText = "";
+}
+
+function selectionIsInsideNotes() {
+  const sel = window.getSelection?.();
+  if (!sel || sel.rangeCount === 0) return false;
+  const anchorNode = sel.anchorNode;
+  const focusNode = sel.focusNode;
+  if (!notesEditor) return false;
+  return (
+    (anchorNode && notesEditor.contains(anchorNode)) ||
+    (focusNode && notesEditor.contains(focusNode))
+  );
+}
+
+function showSelectionSearchNearSelection() {
+  if (!selectionSearchBtn) return;
+  const sel = window.getSelection?.();
+  if (!sel || sel.rangeCount === 0) return hideSelectionSearch();
+  if (!selectionIsInsideNotes()) return hideSelectionSearch();
+
+  const text = String(sel.toString() || "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!text) return hideSelectionSearch();
+
+  const range = sel.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  if (!rect || (rect.width === 0 && rect.height === 0)) return hideSelectionSearch();
+
+  lastSelectionText = text;
+  selectionSearchBtn.hidden = false;
+
+  const btnRect = selectionSearchBtn.getBoundingClientRect();
+  const margin = 8;
+  const top = Math.max(8, rect.top - btnRect.height - margin);
+  const left = Math.min(
+    window.innerWidth - btnRect.width - 8,
+    Math.max(8, rect.left + rect.width / 2 - btnRect.width / 2)
+  );
+
+  selectionSearchBtn.style.top = `${top}px`;
+  selectionSearchBtn.style.left = `${left}px`;
 }
 
 function setMode(mode) {
@@ -78,159 +219,7 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-function uid(prefix) {
-  return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
-}
-
-function formatTime(iso) {
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString();
-  } catch {
-    return iso;
-  }
-}
-
-function toEvidenceUrl(link) {
-  const href = String(link || "");
-  if (href.startsWith("/wiki/")) return `https://en.wikipedia.org${href}`;
-  return href;
-}
-
-function loadEvidence() {
-  const raw = localStorage.getItem(EVIDENCE_STORAGE_KEY);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveEvidence() {
-  localStorage.setItem(EVIDENCE_STORAGE_KEY, JSON.stringify(evidence));
-}
-
-function deleteCard(cardId) {
-  evidence = evidence.filter((c) => c.id !== cardId);
-  saveEvidence();
-  renderEvidence();
-}
-
-function addEvidenceFromItem(item) {
-  const cardId = uid("card");
-  const card = {
-    id: cardId,
-    title: String(item?.title || ""),
-    snippet: String(item?.snippet || ""),
-    url: toEvidenceUrl(item?.link || ""),
-    timestamp: new Date().toISOString()
-  };
-  evidence.unshift(card);
-  saveEvidence();
-  renderEvidence();
-}
-
-function getCardIdAfterDrop(containerEl, clientY) {
-  const cards = [...containerEl.querySelectorAll(".boardCard")].filter((el) => !el.classList.contains("dragging"));
-  let closest = { offset: Number.NEGATIVE_INFINITY, el: null };
-  for (const el of cards) {
-    const box = el.getBoundingClientRect();
-    const offset = clientY - (box.top + box.height / 2);
-    if (offset < 0 && offset > closest.offset) closest = { offset, el };
-  }
-  return closest.el ? closest.el.dataset.cardId : null;
-}
-
-function moveCard(cardId, beforeCardId) {
-  if (!cardId) return;
-  const fromIdx = evidence.findIndex((c) => c.id === cardId);
-  if (fromIdx < 0) return;
-  const [card] = evidence.splice(fromIdx, 1);
-
-  if (!beforeCardId) {
-    evidence.push(card);
-    return;
-  }
-
-  const toIdx = evidence.findIndex((c) => c.id === beforeCardId);
-  if (toIdx < 0) evidence.push(card);
-  else evidence.splice(toIdx, 0, card);
-}
-
-function renderEvidence() {
-  if (!evidenceListEl) return;
-  evidenceListEl.innerHTML = "";
-
-  for (const card of evidence) {
-    const cardEl = document.createElement("article");
-    cardEl.className = "boardCard";
-    cardEl.draggable = true;
-    cardEl.dataset.cardId = card.id;
-
-    const top = document.createElement("div");
-    top.className = "boardCardTop";
-
-    const a = document.createElement("a");
-    a.className = "boardCardTitle";
-    a.href = card.url || "#";
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.textContent = card.title || "(untitled)";
-
-    const del = document.createElement("button");
-    del.className = "boardIconBtn";
-    del.type = "button";
-    del.textContent = "×";
-    del.title = "Delete card";
-    del.dataset.action = "delete";
-    del.dataset.cardId = card.id;
-
-    top.appendChild(a);
-    top.appendChild(del);
-
-    const snip = document.createElement("div");
-    snip.className = "boardCardSnippet";
-    snip.textContent = card.snippet || "";
-
-    const meta = document.createElement("div");
-    meta.className = "boardCardMeta";
-
-    const url = document.createElement("div");
-    url.className = "boardCardUrl";
-    url.textContent = card.url || "";
-
-    const time = document.createElement("time");
-    time.className = "boardCardTime";
-    time.setAttribute("datetime", card.timestamp);
-    time.textContent = formatTime(card.timestamp);
-
-    meta.appendChild(url);
-    meta.appendChild(time);
-
-    cardEl.appendChild(top);
-    cardEl.appendChild(snip);
-    cardEl.appendChild(meta);
-
-    cardEl.addEventListener("dragstart", (e) => {
-      dragCardId = card.id;
-      cardEl.classList.add("dragging");
-      e.dataTransfer.effectAllowed = "move";
-    });
-    cardEl.addEventListener("dragend", () => {
-      cardEl.classList.remove("dragging");
-      dragCardId = null;
-      evidenceListEl.classList.remove("dropActive");
-    });
-
-    evidenceListEl.appendChild(cardEl);
-  }
-}
-
 function renderResults(items) {
-  lastResults = Array.isArray(items) ? items : [];
   resultsEl.innerHTML = "";
   if (!items.length) {
     resultsEl.innerHTML = `<div class="result"><div class="snippet">No results.</div></div>`;
@@ -238,7 +227,7 @@ function renderResults(items) {
   }
 
   const html = items
-    .map((it, idx) => {
+    .map((it) => {
       const title = escapeHtml(it.title || "");
       const link = escapeHtml(it.link || "");
       const displayLink = escapeHtml(it.displayLink || "");
@@ -250,9 +239,6 @@ function renderResults(items) {
           <div class="displayLink">${displayLink}</div>
           <a class="title" href="${link}"${targetAttrs}>${title}</a>
           <div class="snippet">${snippet}</div>
-          <div class="resultActionsRow">
-            <button class="btn evidenceAddBtn" type="button" data-idx="${idx}">Add to evidence board</button>
-          </div>
         </article>
       `;
     })
@@ -287,7 +273,10 @@ function getWikiTitleFromPath() {
 
 function navigateTo(path) {
   window.history.pushState({}, "", path);
-  handleRoute();
+  // Some embeds/browsers can lag updating location after pushState; defer routing.
+  setTimeout(() => {
+    handleRoute();
+  }, 0);
 }
 
 async function loadWikipediaArticle(title) {
@@ -356,39 +345,59 @@ searchFormTop.addEventListener("submit", (e) => onSubmit(e));
 
 notesToggleBtn?.addEventListener("click", toggleNotes);
 notesCloseBtn?.addEventListener("click", () => setNotesOpen(false));
-clearBoardBtn?.addEventListener("click", () => {
-  evidence = [];
-  saveEvidence();
-  renderEvidence();
+autoNotesBtn?.addEventListener("click", () => {
+  if (autoNotes.running) {
+    stopAutoNotes("Stopped.");
+    return;
+  }
+  runAutoNotes();
+});
+selectionSearchBtn?.addEventListener("click", () => {
+  const q = lastSelectionText;
+  if (!q) return;
+  qInput.value = q;
+  qTop.value = q;
+  hideSelectionSearch();
+  runSearch(q);
 });
 
-evidenceListEl?.addEventListener("click", (e) => {
-  const btn = e.target?.closest?.("button[data-action='delete']");
-  if (!btn) return;
-  const cardId = btn.dataset.cardId;
-  if (cardId) deleteCard(cardId);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("notesOpen")) {
+    setNotesOpen(false);
+  }
 });
 
-evidenceListEl?.addEventListener("dragover", (e) => {
-  if (!dragCardId) return;
-  e.preventDefault();
-  evidenceListEl.classList.add("dropActive");
-  e.dataTransfer.dropEffect = "move";
+document.addEventListener("selectionchange", () => {
+  if (!document.body.classList.contains("notesOpen")) return;
+  setTimeout(showSelectionSearchNearSelection, 0);
 });
 
-evidenceListEl?.addEventListener("dragleave", () => {
-  evidenceListEl.classList.remove("dropActive");
+notesEditor?.addEventListener("scroll", () => {
+  if (!selectionSearchBtn?.hidden) showSelectionSearchNearSelection();
 });
 
-evidenceListEl?.addEventListener("drop", (e) => {
-  if (!dragCardId) return;
-  e.preventDefault();
-  evidenceListEl.classList.remove("dropActive");
-  const beforeCardId = getCardIdAfterDrop(evidenceListEl, e.clientY);
-  if (beforeCardId === dragCardId) return;
-  moveCard(dragCardId, beforeCardId);
-  saveEvidence();
-  renderEvidence();
+window.addEventListener("resize", () => {
+  if (!selectionSearchBtn?.hidden) showSelectionSearchNearSelection();
+});
+
+// Persist notes locally (very basic autosave)
+try {
+  const saved = localStorage.getItem(NOTES_STORAGE_KEY);
+  if (saved && notesEditor) notesEditor.textContent = saved;
+} catch {
+  // ignore
+}
+
+let saveT;
+notesEditor?.addEventListener("input", () => {
+  clearTimeout(saveT);
+  saveT = setTimeout(() => {
+    try {
+      localStorage.setItem(NOTES_STORAGE_KEY, notesEditor.textContent || "");
+    } catch {
+      // ignore
+    }
+  }, 250);
 });
 
 window.addEventListener("popstate", () => {
@@ -397,15 +406,6 @@ window.addEventListener("popstate", () => {
 
 // In-app Wikipedia navigation (keep notes available)
 resultsEl?.addEventListener("click", (e) => {
-  const addBtn = e.target?.closest?.("button.evidenceAddBtn");
-  if (addBtn) {
-    e.preventDefault();
-    const idx = Number(addBtn.dataset.idx);
-    const item = lastResults[idx];
-    if (item) addEvidenceFromItem(item);
-    return;
-  }
-
   const a = e.target?.closest?.("a.title");
   const href = a?.getAttribute?.("href") || "";
   if (href.startsWith("/wiki/")) {
@@ -438,6 +438,6 @@ async function handleRoute() {
 
 // Initial load
 setNotesOpen(false);
-renderEvidence();
+setAutoNotesUi({ running: false, statusText: "" });
 handleRoute();
 

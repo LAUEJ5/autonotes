@@ -9,7 +9,11 @@
   <body>
     <main class="page">
       <button class="notesToggle" id="notesToggleBtn" type="button" aria-expanded="false">
-        Evidence
+        Notes
+      </button>
+
+      <button class="selectionSearchBtn" id="selectionSearchBtn" type="button" hidden>
+        Search selection
       </button>
 
       <section class="hero" id="hero">
@@ -70,15 +74,25 @@
         <div class="error" id="error" hidden></div>
       </section>
 
-      <aside class="notesPanel" id="notesPanel" aria-label="Evidence board" aria-hidden="true">
+      <aside class="notesPanel" id="notesPanel" aria-label="Notes" aria-hidden="true">
         <header class="notesHeader">
-          <div class="notesTitle">Evidence board</div>
-          <div class="boardHeaderActions">
-            <button class="btn boardBtn" id="clearBoardBtn" type="button">Clear</button>
-            <button class="notesClose" id="notesCloseBtn" type="button" aria-label="Close evidence board">✕</button>
+          <div class="notesTitle">Notes</div>
+          <div class="notesHeaderActions">
+            <button class="btn autoNotesBtn" id="autoNotesBtn" type="button" aria-pressed="false">
+              Auto notes (30s)
+            </button>
+            <span class="autoNotesStatus" id="autoNotesStatus" aria-live="polite"></span>
+            <button class="notesClose" id="notesCloseBtn" type="button" aria-label="Close notes">✕</button>
           </div>
         </header>
-        <div class="notesEditor evidenceList" id="evidenceList" aria-label="Evidence cards"></div>
+        <div
+          class="notesEditor"
+          id="notesEditor"
+          contenteditable="true"
+          role="textbox"
+          aria-multiline="true"
+          spellcheck="true"
+        ></div>
       </aside>
     </main>
 

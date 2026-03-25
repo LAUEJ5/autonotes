@@ -4,13 +4,14 @@ A tiny “Chrome new tab”-style search page that calls a backend `/api/search`
 
 This project uses a **search provider API** because building a real web search engine (crawling, indexing, ranking) isn’t something you can reasonably build inside an app like this.
 
-## Variant B: Auto-Capture Evidence Board
+## Auto Notes Summarizer (Wikipedia)
 
-Instead of a manual notebook, this variant includes an **evidence board** (right side) where you can capture search result snippets as cards:
+This variant keeps the standard **Notes** panel and adds **Auto notes (30s)**:
 
-- Click **Add to evidence board** on any result to capture **title, snippet, URL, timestamp**
-- Cards can be **rearranged**, **grouped**, and **deleted**
-- Board state persists in `localStorage`
+- Open a Wikipedia article inside the app (`/wiki/...`)
+- Open **Notes**
+- Click **Auto notes (30s)** to summarize the current article and append the summary to Notes
+- You can click again to stop early; it also turns itself off after ~30s
 
 ## Run it
 
@@ -21,6 +22,17 @@ npm run dev
 ```
 
 Then open `http://localhost:3000`.
+
+## OpenAI setup (for Auto notes)
+
+1. Create an OpenAI API key and put it in `.env` (server-side only):
+
+```dotenv
+OPENAI_API_KEY=your_key_here
+OPENAI_MODEL=gpt-4o-mini
+```
+
+2. Restart the server.
 
 ## Simplest mode: Wikipedia-only (no keys, no subscriptions)
 

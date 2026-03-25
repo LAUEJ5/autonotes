@@ -6,9 +6,150 @@ const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 app.disable("x-powered-by");
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
+});
+
+function jsonError(res, status, error, details) {
+  res.status(status).json({ ok: false, error, details: details ?? null });
+}
+
+async function fetchWikipediaPlaintext(title) {
+  const apiUrl = new URL("https://en.wikipedia.org/w/api.php");
+  apiUrl.searchParams.set("action", "query");
+  apiUrl.searchParams.set("prop", "extracts");
+  apiUrl.searchParams.set("explaintext", "1");
+  apiUrl.searchParams.set("redirects", "1");
+  apiUrl.searchParams.set("titles", title);
+  apiUrl.searchParams.set("format", "json");
+
+  const r = await fetch(apiUrl.toString(), {
+    headers: {
+      "User-Agent": "basic-chrome-search/0.1 (local dev)"
+    }
+  });
+  const json = await r.json();
+  if (!r.ok) {
+    return { ok: false, status: r.status, error: "Wikipedia API error", details: json };
+  }
+
+  const pages = json?.query?.pages || {};
+  const firstKey = Object.keys(pages)[0];
+  const page = firstKey ? pages[firstKey] : null;
+  const extract = page?.extract ? String(page.extract) : "";
+  const normalizedTitle = page?.title ? String(page.title) : title;
+
+  if (!extract.trim()) {
+    return {
+      ok: false,
+      status: 404,
+      error: "No article text found",
+      details: { title: normalizedTitle }
+    };
+  }
+
+  return { ok: true, title: normalizedTitle, text: extract };
+}
+
+async function summarizeWithOpenAI({ title, text }) {
+  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) {
+    return {
+      ok: false,
+      status: 500,
+      error: "Missing OPENAI_API_KEY. Copy .env.example to .env and fill it in."
+    };
+  }
+
+  const model = String(process.env.OPENAI_MODEL || "").trim() || "gpt-4o-mini";
+
+  // Keep request size bounded.
+  const MAX_CHARS = 40_000;
+  const clipped = text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) : text;
+
+  const prompt = [
+    "You are an automatic note-taker. Summarize the following Wikipedia article text as investigation notes.",
+    "",
+    "Requirements:",
+    "- Start with 1-2 sentence TL;DR.",
+    "- Then 8-14 bullet points of key facts (names, dates, events, definitions).",
+    "- Include uncertainties/controversies if present.",
+    "- Keep it concise, no fluff.",
+    "",
+    `Article title: ${title}`,
+    "",
+    "Article text:",
+    clipped
+  ].join("\n");
+
+  const r = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      input: prompt,
+      max_output_tokens: 500
+    })
+  });
+
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    return {
+      ok: false,
+      status: r.status,
+      error: json?.error?.message || "OpenAI API error",
+      details: json
+    };
+  }
+
+  const summary =
+    String(json?.output_text || "").trim() ||
+    String(
+      Array.isArray(json?.output)
+        ? json.output
+            .flatMap((o) => (Array.isArray(o?.content) ? o.content : []))
+            .filter((c) => c && (c.type === "output_text" || typeof c.text === "string"))
+            .map((c) => String(c.text || ""))
+            .join("")
+        : ""
+    ).trim();
+  if (!summary) {
+    return { ok: false, status: 500, error: "OpenAI returned empty summary", details: json };
+  }
+
+  return { ok: true, summary };
+}
+
+app.post("/api/auto-notes", async (req, res) => {
+  try {
+    const title = String(req.body?.title || "").trim();
+    if (!title) return jsonError(res, 400, "Missing body param: title");
+
+    const wiki = await fetchWikipediaPlaintext(title);
+    if (!wiki.ok) return jsonError(res, wiki.status || 500, wiki.error, wiki.details);
+
+    const sum = await summarizeWithOpenAI({ title: wiki.title, text: wiki.text });
+    if (!sum.ok) return jsonError(res, sum.status || 500, sum.error, sum.details);
+
+    const preview = wiki.text.slice(0, 200).replace(/\s+/g, " ").trim();
+    res.json({
+      ok: true,
+      title: wiki.title,
+      summary: sum.summary,
+      source: {
+        charsFetched: wiki.text.length,
+        charsSentToOpenAI: Math.min(wiki.text.length, 40_000),
+        preview
+      }
+    });
+  } catch (e) {
+    return jsonError(res, 500, "Unexpected server error", { message: e?.message ? String(e.message) : String(e) });
+  }
 });
 
 app.get("/api/search", async (req, res) => {
@@ -171,7 +312,18 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
-function listenWithFallback(preferredPort, maxAttempts = 10) {
+function listenWithFallback(preferredPort, maxAttempts = 50) {
+  // If PORT=0, let the OS pick an open port.
+  if (preferredPort === 0) {
+    const server = app.listen(0, () => {
+      const addr = server.address();
+      const actualPort = typeof addr === "object" && addr ? addr.port : 0;
+      // eslint-disable-next-line no-console
+      console.log(`Listening on http://localhost:${actualPort}`);
+    });
+    return;
+  }
+
   const tryListen = (port, attempt) => {
     const server = app.listen(port, () => {
       // eslint-disable-next-line no-console
@@ -196,5 +348,5 @@ function listenWithFallback(preferredPort, maxAttempts = 10) {
   tryListen(preferredPort, 1);
 }
 
-listenWithFallback(PORT);
+listenWithFallback(PORT, 200);
 
